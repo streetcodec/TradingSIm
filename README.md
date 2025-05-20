@@ -146,35 +146,8 @@ Features:
 ### Prerequisites
 - C++17 or later
 - wxWidgets 3.1+
-- CMake 3.15+
 - IXWebSocket library
 
-### Build Instructions
-```bash
-mkdir build
-cd build
-cmake ..
-make
-```
-
-## Usage
-
-### Configuration
-```cpp
-struct TradingParams {
-    wxString exchange = "OKX";
-    wxString asset = "BTC-USDT-SWAP";
-    wxString order_type = "market";
-    wxString quantity = "500.0";
-    wxString volatility = "0.02";
-    wxString fee_tier = "1";
-}
-```
-
-### Running
-```bash
-./trading_sim
-```
 
 ## License
 
