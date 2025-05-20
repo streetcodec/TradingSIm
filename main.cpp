@@ -3,6 +3,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <chrono>
 #include <memory>
 #include <ixwebsocket/IXWebSocket.h>
 #include <rapidjson/document.h>
@@ -16,7 +17,7 @@ struct TradingParams {
     wxString exchange = "OKX";
     wxString asset = "BTC-USDT-SWAP";
     wxString order_type = "market";
-    wxString quantity = "100.0";
+    wxString quantity = "500.0";
     wxString volatility = "0.02";
     wxString fee_tier = "1"; // 0.1% in decimal
     wxString current_endpoint;
@@ -86,32 +87,28 @@ protected:
                                     volatility = std::stod(m_params->volatility.ToStdString());
                                     fee_tier = std::stod(m_params->fee_tier.ToStdString()) * 0.001;
                                 }
-                                
+                                auto start_time = std::chrono::high_resolution_clock::now();
                                 // Calculate slippage
-                                auto metrics = calculateMetrics(
+                                std::vector<double> metrics = calculateMetrics(
                                             quantity,
                                             volatility,
                                             fee_tier,
                                             asks,
                                             bids
                                         );
-
-                                        // Format display text
-                                wxString displayText = wxString::Format(
-                                            "Slippage: %.4f%%\n"
-                                            "Impact Cost: %.4f\n"
-                                            "Temp Impact: %.4f\n"
-                                            "Perm Impact: %.4f\n"
-                                            "Total Impact: %.4f\n"
-                                            "Impact (bps): %.2f",
-                                            metrics[0] * 100, // slippage in %
-                                            metrics[1],
-                                            metrics[2],       // temp impact
-                                            metrics[3],       // perm impact
-                                            metrics[4]       // total impact
-                                                   // impact in bps
-                                        );
+                                auto end_time = std::chrono::high_resolution_clock::now();
+                                auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
                                 
+                                wxString displayText = wxString::Format(
+                                    "Slippage: %.4f%%\n"
+                                    "Impact Cost: %.4f\n",
+                                    "Latency:\n",
+                                    metrics[0] * 100,   // slippage in %
+                                    metrics[1] * 100,
+                                    metrics[2],
+                                    latency_us  // latency in milliseconds
+                                );
+
                                 // Send update event
                                 wxCommandEvent event(EVT_METRIC_UPDATE);
                                 event.SetString(displayText);
