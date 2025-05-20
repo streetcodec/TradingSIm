@@ -130,47 +130,95 @@ double calculateMarketImpact(
     std::cout<<"total_impact_value / order_value  "<<total_impact_value / order_value<<"\n";
     return total_impact_value / order_value;
 }
+
 double calculateFees(
-  int fee_tier,
-    double quantity,
+    double fee_tier,
+    double quantity_usd,
     const std::vector<OrderBookLevel>& asks
-    )
-{
-    // Fee tiers map - taker fee only (since it's always taker for market orders)
-    static const std::map<int, double> fee_tiers = {
-        {0, 0.0010},  // VIP 0
-        {1, 0.0008},  // VIP 1
-        {2, 0.0007},  // VIP 2
-        {3, 0.0006},  // VIP 3
-        {4, 0.0005},  // VIP 4
-        {5, 0.0004}   // VIP 5
-    };
+) {
+    // Simple fee calculation based on basis points
+    double fee_bps;
     
-    // Find the fee tier
-    auto it = fee_tiers.find(fee_tier);
-    if (it == fee_tiers.end()) {
-        throw std::invalid_argument("Invalid fee tier (must be 0-5)");
-    }
+    // Map fee tier to basis points (0.01% = 1 basis point)
+    if (fee_tier <= 0) fee_bps = 10.0;      // 0.10%
+    else if (fee_tier <= 1) fee_bps = 8.0;  // 0.08%
+    else if (fee_tier <= 2) fee_bps = 7.0;  // 0.07%
+    else if (fee_tier <= 3) fee_bps = 6.0;  // 0.06%
+    else if (fee_tier <= 4) fee_bps = 5.0;  // 0.05%
+    else fee_bps = 4.0;                     // 0.04%
     
-    double taker_fee = it->second;
-    double remaining_qty = quantity;
-    double total_fees = 0.0;
-    
-    // Calculate fees by consuming the ask side of the order book
-    for (const auto& level : asks) {
-        if (remaining_qty <= 0) break;
-        
-        double qty = std::min(remaining_qty, level.quantity);
-        total_fees += qty * level.price * taker_fee;
-        remaining_qty -= qty;
-    }
-    
-    if (remaining_qty > 0) {
-        throw std::runtime_error("Not enough liquidity in the order book to fulfill the order");
-    }
-    
-    return total_fees;
+    // Calculate fee (convert basis points to decimal)
+    return (fee_bps / 10000.0) * quantity_usd;
 }
+
+double calculateNetCost(
+    double slippage,
+    double fees,
+    double market_impact
+) {
+    // Convert all components to percentages and sum them
+    return (slippage + fees + market_impact) * 100.0; // Return as percentage
+}
+
+double calculateMakerTakerProportion(
+    const std::vector<OrderBookLevel>& asks,
+    const std::vector<OrderBookLevel>& bids
+) {
+    if (asks.empty() || bids.empty()) return 0.5;
+
+    // Extract features for logistic regression
+    double askVolume = 0.0;
+    double bidVolume = 0.0;
+    double askPriceSpread = 0.0;
+    double bidPriceSpread = 0.0;
+    double askDepth = 0.0;
+    double bidDepth = 0.0;
+
+    // Calculate volumes and price spreads
+    for (size_t i = 0; i < asks.size(); i++) {
+        askVolume += asks[i].quantity;
+        if (i > 0) {
+            askPriceSpread += (asks[i].price - asks[i-1].price) / asks[i-1].price;
+        }
+        askDepth += asks[i].quantity * asks[i].price;
+    }
+
+    for (size_t i = 0; i < bids.size(); i++) {
+        bidVolume += bids[i].quantity;
+        if (i > 0) {
+            bidPriceSpread += (bids[i-1].price - bids[i].price) / bids[i-1].price;
+        }
+        bidDepth += bids[i].quantity * bids[i].price;
+    }
+
+    // Normalize features
+    double totalVolume = askVolume + bidVolume;
+    if (totalVolume == 0) return 0.5;
+
+    // Calculate normalized features
+    double volumeRatio = bidVolume / totalVolume;
+    double spreadRatio = (bidPriceSpread - askPriceSpread) / (bidPriceSpread + askPriceSpread + 1e-10);
+    double depthRatio = (bidDepth - askDepth) / (bidDepth + askDepth + 1e-10);
+
+    // Logistic regression weights (these could be trained on historical data)
+    const double w1 = 2.0;  // Volume weight
+    const double w2 = 1.0;  // Spread weight
+    const double w3 = 1.5;  // Depth weight
+    const double bias = -0.5;
+
+    // Calculate logistic regression score
+    double score = w1 * volumeRatio + 
+                  w2 * spreadRatio + 
+                  w3 * depthRatio + 
+                  bias;
+
+    // Apply sigmoid function to get probability
+    double probability = 1.0 / (1.0 + std::exp(-score));
+
+    // Ensure the result is between 0 and 1
+    return std::max(0.0, std::min(1.0, probability));
+}
+
 std::vector<double> calculateMetrics(
     double quantity_usd,
     double volatility,
@@ -181,8 +229,7 @@ std::vector<double> calculateMetrics(
 ) {
     double slippage = estimateExpectedSlippage(quantity_usd, volatility, feeTier, asks, bids, quantile);
 
-
-    // Calculate market impact (use default params for        mid_price, simplicity)
+    // Calculate market impact
     double impact = calculateMarketImpact(
         quantity_usd,
         volatility,
@@ -190,16 +237,24 @@ std::vector<double> calculateMetrics(
         bids,
         slippage
     );
+    
     double fees = calculateFees(
         feeTier,
         quantity_usd,
         asks
     );
 
+    // Calculate new metrics
+    double netCost = calculateNetCost(slippage, fees, impact);
+    double makerTakerProp = calculateMakerTakerProportion(asks, bids);
+
     // Return all values in an array (vector)
     return {
         slippage,           // [0]
-        impact,
-        fees       // [5]
+        impact,             // [1]
+        fees,              // [2]
+        netCost,           // [3]
+        makerTakerProp     // [4]
     };
 }
+

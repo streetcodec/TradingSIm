@@ -80,39 +80,107 @@ protected:
                             
                             if (!asks.empty() && !bids.empty()) {
                                 // Get current parameters
-                                double quantity, volatility, fee_tier;
-                                {
+                                double quantity = 0.0, volatility = 0.0, fee_tier = 0.0;
+                                try {
                                     std::lock_guard<std::mutex> lock(m_params->mutex);
                                     quantity = std::stod(m_params->quantity.ToStdString());
                                     volatility = std::stod(m_params->volatility.ToStdString());
-                                    fee_tier = std::stod(m_params->fee_tier.ToStdString()) * 0.001;
+                                    fee_tier = std::stod(m_params->fee_tier.ToStdString());
+                                } catch (const std::exception& e) {
+                                    wxString errorText = wxString::Format("Error parsing parameters: %s", e.what());
+                                    wxCommandEvent event(EVT_METRIC_UPDATE);
+                                    event.SetString(errorText);
+                                    wxQueueEvent(m_handler, event.Clone());
+                                    // continue;
                                 }
+
                                 auto start_time = std::chrono::high_resolution_clock::now();
-                                // Calculate slippage
-                                std::vector<double> metrics = calculateMetrics(
-                                            quantity,
-                                            volatility,
-                                            fee_tier,
-                                            asks,
-                                            bids
-                                        );
-                                auto end_time = std::chrono::high_resolution_clock::now();
-                                auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
                                 
-                                wxString displayText = wxString::Format(
-                                    "Slippage: %.4f%%\n"
-                                    "Impact Cost: %.4f\n",
-                                    "Latency:\n",
-                                    metrics[0] * 100,   // slippage in %
-                                    metrics[1] * 100,
-                                    metrics[2],
-                                    latency_us  // latency in milliseconds
-                                );
+                                // Calculate metrics with error handling
+                                std::vector<double> metrics;
+                                try {
+                                    metrics = calculateMetrics(
+                                        quantity,
+                                        volatility,
+                                        fee_tier,
+                                        asks,
+                                        bids
+                                    );
+                                } catch (const std::exception& e) {
+                                    wxString errorText = wxString::Format("Error calculating metrics: %s", e.what());
+                                    wxCommandEvent event(EVT_METRIC_UPDATE);
+                                    event.SetString(errorText);
+                                    wxQueueEvent(m_handler, event.Clone());
+                                    // continue;
+                                }
+
+                                auto calc_end_time = std::chrono::high_resolution_clock::now();
+                                auto calc_latency_us = std::chrono::duration_cast<std::chrono::microseconds>(calc_end_time - start_time).count();
+                                
+                                // Format the display text with proper error checking
+                                wxString displayText;
+                                try {
+                                    displayText = wxString::Format(
+                                        "Slippage: %.4f%%\n"
+                                        "Impact Cost: %.4f%%\n"
+                                        "Fees: %.4f%%\n"
+                                        "Net Cost: %.4f%%\n"
+                                        "Maker/Taker Ratio: %.2f\n"
+                                        "Calculation Time: %.2f ms\n"
+                                        "UI Update Time: %.2f ms",
+                                        metrics[0] * 100.0,   // slippage in %
+                                        metrics[1] * 100.0,   // impact in %
+                                        metrics[2] * 100.0,   // fees in %
+                                        metrics[3],          // net cost in %
+                                        metrics[4],          // maker/taker proportion
+                                        calc_latency_us / 1000.0,  // calculation time in ms
+                                        0.0  // UI update time will be set after update
+                                    );
+                                } catch (const std::exception& e) {
+                                    displayText = wxString::Format("Error formatting display: %s", e.what());
+                                }
 
                                 // Send update event
                                 wxCommandEvent event(EVT_METRIC_UPDATE);
                                 event.SetString(displayText);
+                                auto ui_start_time = std::chrono::high_resolution_clock::now();
                                 wxQueueEvent(m_handler, event.Clone());
+                                
+                                // Wait for a short time to allow UI update
+                                wxThread::Sleep(10);
+                                
+                                auto ui_end_time = std::chrono::high_resolution_clock::now();
+                                auto ui_latency_us = std::chrono::duration_cast<std::chrono::microseconds>(ui_end_time - ui_start_time).count();
+                                
+                                // Update the display text with UI latency
+                                try {
+                                    displayText = wxString::Format(
+                                        "Slippage: %.4f%%\n"
+                                        "Impact Cost: %.4f%%\n"
+                                        "Fees: %.4f%%\n"
+                                        "Net Cost: %.4f%%\n"
+                                        "Maker/Taker Ratio: %.2f\n"
+                                        "Calculation Time: %.2f ms\n"
+                                        "UI Update Time: %.2f ms",
+                                        metrics[0] * 100.0,   // slippage in %
+                                        metrics[1] * 100.0,   // impact in %
+                                        metrics[2] * 100.0,   // fees in %
+                                        metrics[3],          // net cost in %
+                                        metrics[4],          // maker/taker proportion
+                                        calc_latency_us / 1000.0,  // calculation time in ms
+                                        ui_latency_us / 1000.0     // UI update time in ms
+                                    );
+                                    
+                                    // Send final update with both latencies
+                                    wxCommandEvent finalEvent(EVT_METRIC_UPDATE);
+                                    finalEvent.SetString(displayText);
+                                    wxQueueEvent(m_handler, finalEvent.Clone());
+                                } catch (const std::exception& e) {
+                                    wxString errorText = wxString::Format("Error updating UI latency: %s", e.what());
+                                    wxCommandEvent errorEvent(EVT_METRIC_UPDATE);
+                                    errorEvent.SetString(errorText);
+                                    wxQueueEvent(m_handler, errorEvent.Clone());
+                                }
                             }
                         }
                     }
